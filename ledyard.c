@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <bool.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <string.h>
 
-#define MAX_CARS 3;
+#define MAX_CARS 3
 
 enum Direction {
-  TO_NORWICH = 1
+  TO_NORWICH = 1,
   TO_HANOVER = 2
 };
 
@@ -27,7 +27,7 @@ typedef struct bridge_state {
 } bridge_state_t;
 
 int
-main(const int argc, const char* argv)
+main(const int argc, const char** argv)
 {
   return 0;
 }
@@ -56,8 +56,8 @@ bridge_state_new(enum Direction startDir)
   bridge_state_t* newBridgeState = malloc(sizeof(bridge_state_t));
   newBridgeState->num_cars = 0;
   newBridgeState->curr_direction = startDir;
-  newBridgeState->cars = malloc(MAX_CARS*sizeof(char*));
-  return bridge_state_new;
+  newBridgeState->cars = malloc(MAX_CARS * sizeof(char*));
+  return newBridgeState;
 }
 
 bridge_state_t*
@@ -73,18 +73,19 @@ bridge_state_add_car(bridge_state_t* bridgeState, char* carId)
 bridge_state_t*
 bridge_state_remove_car(bridge_state_t* bridgeState, char* carId)
 {
+  int numCars = bridgeState->num_cars;
   int carIndex = 0;
-  for ( int i = 0; i < bridgeState->num_cars; i ++ ) {
+  for ( int i = 0; i < numCars; i ++ ) {
     if (strcmp(carId, bridgeState->cars[i]) == 0) {
       carIndex = i;
-      free(bridgeState->cars[carId]);
+      free(bridgeState->cars[carIndex]);
       break;
     }
   }
 
-  if (carIndex < num_cars - 1) {
-    for ( int i = carIndex + 1; i < bridgeState->num_cars; i ++ ) {
-      bridgeState->cars[i-1] = bridge_state->cars[i];
+  if (carIndex < numCars - 1) {
+    for ( int i = carIndex + 1; i < numCars; i ++ ) {
+      bridgeState->cars[i-1] = bridgeState->cars[i];
       bridgeState->cars[i] = NULL;
     }
   }
@@ -95,7 +96,7 @@ bridge_state_remove_car(bridge_state_t* bridgeState, char* carId)
 bridge_state_t*
 bridge_state_change_direction(bridge_state_t* bridgeState, enum Direction newDir)
 {
-  bridgeState->direction = newDir;
+  bridgeState->curr_direction = newDir;
   return bridgeState;
 }
 
