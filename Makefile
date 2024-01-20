@@ -7,7 +7,7 @@ OUTPUT = ledyard
 all: ledyard
 
 ledyard: ledyard.c
-	gcc -std=c99 -Wall -g -o ledyard ledyard.c
+	gcc -std=c99 -Wall -g -o ledyard ledyard.c -pthread
 
 clean:
 	rm -f $(OBJS) $(OUTPUT)
