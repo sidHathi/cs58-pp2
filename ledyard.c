@@ -1,3 +1,13 @@
+/* 
+ * ledyard.c - CS58 Programming Project 2
+ * 
+ * The 'ledyard' module defines an executable program that 
+ * simulates cars moving accross the ledyard bridge using
+ * multithreading
+ *
+ * Siddharth Hathi, January 2024
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -6,20 +16,17 @@
 #include <unistd.h>
 #include <time.h>
 
+/**************** file-local global constants ****************/
 #define MAX_CARS 4
 #define MAX_TRAVEL_TIME 6
 #define MAX_WAIT_TIME 2
 #define SIMULATION_ITERATIONS 50
 
+/**************** global types ****************/
 enum Direction {
   TO_NORWICH = 1,
   TO_HANOVER = 2
 };
-
-pthread_cond_t norwichCond = PTHREAD_COND_INITIALIZER;
-pthread_cond_t hanoverCond = PTHREAD_COND_INITIALIZER;
-bool canTravelToNorwich = true;
-bool canTravelToHanover = true;
 
 typedef struct bridge_state {
   int num_cars;
@@ -38,10 +45,16 @@ typedef struct bridge_state {
 
 bridge_state_t* global_bridge_state = NULL;
 
+/**************** file-local global variables ****************/
+pthread_cond_t norwichCond = PTHREAD_COND_INITIALIZER;
+pthread_cond_t hanoverCond = PTHREAD_COND_INITIALIZER;
+bool canTravelToNorwich = true;
+bool canTravelToHanover = true;
+
 int waiting_on_norwich = 0;
 int waiting_on_hanover = 0;
-int waiting_on_lock = 0;
 
+/**************** function prototypes ****************/
 static void* OneVehicle(void* dirPointer);
 static void ArriveBridge();
 static void OnBridge();
@@ -59,6 +72,7 @@ static void bridge_state_free(bridge_state_t* bridgeState);
 static void simulate_traffic();
 static pthread_t start_car_thread(enum Direction direction);
 
+/* ***************** main ********************** */
 int
 main(const int argc, const char** argv)
 {
@@ -71,6 +85,14 @@ main(const int argc, const char** argv)
   return 0;
 }
 
+/**************** OneVehicle ****************/
+/**
+ * Threaded function -> simulates a single vehicle crossing
+ * the ledyard bridge
+ *
+ * Caller provides:
+ *   Pointer towards the direction of movement of the vehicle
+ */
 void*
 OneVehicle(void* dirPointer)
 {
@@ -82,6 +104,14 @@ OneVehicle(void* dirPointer)
   return NULL;
 }
 
+/**************** ArriveBridge ****************/
+/**
+ * Simulates a car arriving at the bridge -> the car will wait
+ * if the bridge is full in its direction, or join the bridge otherwise
+ *
+ * Caller provides:
+ *   Direction of travel of the car
+ */
 void
 ArriveBridge(enum Direction direction)
 {
@@ -94,6 +124,10 @@ ArriveBridge(enum Direction direction)
   printf("Car %lu is entering the bridge\n", currThread);
 }
 
+/**************** OnBridge ****************/
+/**
+ * Reads the current state of the bridge and prints it
+ */
 void
 OnBridge()
 {
@@ -103,7 +137,7 @@ OnBridge()
   for ( int i = 0; i < travelIterations; i ++ ) {
     int percentageProgress = (100 * i)/travelIterations;
     bridge_state_start_read(global_bridge_state);
-    printf("OnBridge has lock\n");
+    // printf("OnBridge has lock\n");
 
     int numCars = global_bridge_state->num_cars;
     int currDirection = global_bridge_state->curr_direction;
@@ -118,6 +152,10 @@ OnBridge()
   }
 }
 
+/**************** ExitBridge ****************/
+/**
+ * Simulates the car leaving the bridge
+ */
 void
 ExitBridge()
 {
@@ -130,6 +168,15 @@ ExitBridge()
   printf("Car %lu is leaving the bridge\n", currThread);
 }
 
+/**************** bridge_state_new ****************/
+/**
+ * Constructor function for the bridge_state_new struct
+ * 
+ * Caller provides:
+ *    Start direction for bridge travel
+ * Function returns
+ *    A pointer to the initialized bridge struct
+ */
 bridge_state_t*
 bridge_state_new(enum Direction startDir)
 {
@@ -149,6 +196,19 @@ bridge_state_new(enum Direction startDir)
   return newBridgeState;
 }
 
+/**************** bridge_state_direction_possible ****************/
+/**
+ * Takes in a pointer to a bridge_state_t struct and determines
+ * whether travel in a given direction is possible
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ *    direction under question
+ * We assume
+ *    thread is in read mode with bridge_state_t mutex locked
+ * Function returns
+ *    a boolean that represents whether travel is possible
+ */
 bool
 bridge_state_direction_possible(bridge_state_t* bridgeState, enum Direction direction)
 {
@@ -160,13 +220,21 @@ bridge_state_direction_possible(bridge_state_t* bridgeState, enum Direction dire
   return false;
 }
 
+
+/**************** bridge_state_start_read ****************/
+/**
+ * Locks the access mutex for a bridge_state_t struct and updates
+ * numReaders to indicate that the current thread has started
+ * to read the bridge_state_t struct
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ */
 void
 bridge_state_start_read(bridge_state_t* bridgeState)
 {
   // printf("attempting to acquire access lock\n");
-  waiting_on_lock ++;
   pthread_mutex_lock(&bridgeState->access_lock);
-  waiting_on_lock --;
   // printf("acquired access lock in start read\n");
   while (bridgeState->writing) {
     // printf("waiting for write to terminate\n");
@@ -175,6 +243,15 @@ bridge_state_start_read(bridge_state_t* bridgeState)
   bridgeState->num_readers ++;
 }
 
+/**************** bridge_state_end_read ****************/
+/**
+ * Unlocks the access mutex for a bridge_state_t struct and updates
+ * numReaders to indicate that the current thread has finished
+ * reading the bridge_state_t struct
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ */
 void
 bridge_state_end_read(bridge_state_t* bridgeState)
 {
@@ -186,13 +263,20 @@ bridge_state_end_read(bridge_state_t* bridgeState)
   // printf("released access lock for read\n");
 }
 
+/**************** bridge_state_start_write ****************/
+/**
+ * Locks the access mutex for a bridge_state_t struct and updates
+ * the writing field to indicate that the current thread has started
+ * to write to the bridge_state_t struct
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ */
 void
 bridge_state_start_write(bridge_state_t* bridgeState)
 {
   // printf("attempting to acquire access lock\n");
-  waiting_on_lock ++;
   pthread_mutex_lock(&bridgeState->access_lock);
-  waiting_on_lock --;
   // printf("acquired access lock in start write\n");
   while (bridgeState->writing || bridgeState->num_readers > 0) {
     // printf("Waiting for read/write to terminate, numreaders: %d\n", bridgeState->num_readers);
@@ -201,6 +285,15 @@ bridge_state_start_write(bridge_state_t* bridgeState)
   bridgeState->writing = true;
 }
 
+/**************** bridge_state_end_read ****************/
+/**
+ * Unlocks the access mutex for a bridge_state_t struct and updates
+ * the writing field to indicate that the current thread has finished
+ * writing to the bridge_state_t struct
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ */
 void
 bridge_state_end_write(bridge_state_t* bridgeState)
 {
@@ -213,7 +306,14 @@ bridge_state_end_write(bridge_state_t* bridgeState)
   pthread_cond_broadcast(&bridgeState->readable);
 }
 
-
+/**************** bridge_state_end_read ****************/
+/**
+ * Signals any threads waiting to enter the bridge from either direction
+ * that the bridge can be entered when appropriate
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ */
 void
 bridge_state_signal_waiters(bridge_state_t* bridgeState)
 {
@@ -235,7 +335,6 @@ bridge_state_signal_waiters(bridge_state_t* bridgeState)
     // if (!bridgeState->hanover_possible) {
     // printf("signaling in hanover direction\n");
     bridgeState->hanover_possible = true;
-    pthread_cond_broadcast(&bridgeState->hanover_cond);
     signalHanover = true;
     // }
   } else {
@@ -243,13 +342,22 @@ bridge_state_signal_waiters(bridge_state_t* bridgeState)
   }
   bridge_state_end_write(bridgeState);
   if (signalNorwich) {
-    pthread_cond_broadcast(&bridgeState->norwich_cond);
+    pthread_cond_signal(&bridgeState->norwich_cond);
   }
   if (signalHanover) {
-    pthread_cond_broadcast(&bridgeState->hanover_cond);
+    pthread_cond_signal(&bridgeState->hanover_cond);
   }
 }
 
+/**************** bridge_state_add_car ****************/
+/**
+ * Adds a car to the bridge state object (indexed by thread id)
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ *    thread id
+ *    direction of travel
+ */
 bridge_state_t*
 bridge_state_add_car(bridge_state_t* bridgeState, pthread_t carThread, enum Direction direction)
 {
@@ -283,6 +391,14 @@ bridge_state_add_car(bridge_state_t* bridgeState, pthread_t carThread, enum Dire
   return bridgeState;
 }
 
+/**************** bridge_state_add_car ****************/
+/**
+ * Removes a car from the bridge state object (indexed by thread id)
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ *    thread id of car to remove
+ */
 bridge_state_t*
 bridge_state_remove_car(bridge_state_t* bridgeState, pthread_t carThread)
 {
@@ -310,6 +426,13 @@ bridge_state_remove_car(bridge_state_t* bridgeState, pthread_t carThread)
   return bridgeState;
 }
 
+/**************** bridge_state_frees ****************/
+/**
+ * Frees all memory allocated for the bridge_state struct
+ * 
+ * Caller provides:
+ *    pointer to the bridge_state_t struct
+ */
 void
 bridge_state_free(bridge_state_t* bridgeState)
 {
@@ -317,6 +440,10 @@ bridge_state_free(bridge_state_t* bridgeState)
   free(bridgeState);
 }
 
+/**************** simulate_traffic ****************/
+/**
+ * Spins up threads for each car to simulate traffic accross the bridge
+ */
 void
 simulate_traffic()
 {
@@ -348,6 +475,13 @@ simulate_traffic()
   printf("Simulation complete\n");
 }
 
+/**************** start_car_thread ****************/
+/**
+ * Spins up a thread for a single car and executes it
+ * 
+ * Function returns:
+ *    thread id of the resultant thread
+ */
 pthread_t
 start_car_thread(enum Direction direction)
 {
