@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <math.h>
 
 /**************** file-local global constants ****************/
 #define MAX_CARS 4
@@ -28,6 +29,7 @@ enum Direction {
   TO_HANOVER = 2
 };
 
+// typedef for struct that stores the state of the simulation
 typedef struct bridge_state {
   int num_cars;
   enum Direction curr_direction;
@@ -43,16 +45,11 @@ typedef struct bridge_state {
   pthread_cond_t hanover_cond;
 } bridge_state_t;
 
-bridge_state_t* global_bridge_state = NULL;
-
 /**************** file-local global variables ****************/
-pthread_cond_t norwichCond = PTHREAD_COND_INITIALIZER;
-pthread_cond_t hanoverCond = PTHREAD_COND_INITIALIZER;
-bool canTravelToNorwich = true;
-bool canTravelToHanover = true;
+bridge_state_t* global_bridge_state = NULL; // current state of simulation
 
-int waiting_on_norwich = 0;
-int waiting_on_hanover = 0;
+int max_cars = 0;
+int max_travel_time = 0;
 
 /**************** function prototypes ****************/
 static void* OneVehicle(void* dirPointer);
@@ -69,17 +66,26 @@ static void bridge_state_end_write(bridge_state_t* bridgeState);
 static bridge_state_t* bridge_state_add_car(bridge_state_t* bridgeState, pthread_t carThread, enum Direction direction);
 static bridge_state_t* bridge_state_remove_car(bridge_state_t* bridgeState, pthread_t carThread);
 static void bridge_state_free(bridge_state_t* bridgeState);
-static void simulate_traffic();
+static void simulate_traffic(int numIters, int waitTime, int travelTime, int maxCars);
 static pthread_t start_car_thread(enum Direction direction);
+static void run_test_case_1();
+static void run_test_case_2();
+static void run_test_case_3();
+static void run_test_case_4();
 
 /* ***************** main ********************** */
 int
 main(const int argc, const char** argv)
 {
-  enum Direction startDir = TO_HANOVER;
-  global_bridge_state = bridge_state_new(startDir);
+  // enum Direction startDir = TO_HANOVER;
+  // global_bridge_state = bridge_state_new(startDir);
 
-  simulate_traffic(global_bridge_state);
+  // simulate_traffic(SIMULATION_ITERATIONS, MAX_WAIT_TIME, MAX_TRAVEL_TIME, MAX_CARS);
+
+  run_test_case_1();
+  run_test_case_2();
+  run_test_case_3();
+  run_test_case_4();
 
   bridge_state_free(global_bridge_state);
   return 0;
@@ -132,7 +138,7 @@ void
 OnBridge()
 {
   // print current state of bridge and sleep
-  int travelIterations = rand() % MAX_TRAVEL_TIME;
+  int travelIterations = rand() % max_travel_time;
   pthread_t currThread = pthread_self();
   for ( int i = 0; i < travelIterations; i ++ ) {
     int percentageProgress = (100 * i)/travelIterations;
@@ -147,7 +153,6 @@ OnBridge()
     char* directionString = currDirection == TO_HANOVER ? "Hanover" : "Norwich";
     
     printf("Car %lu is on the bridge:\n\t Traveling towards: %s \n\t Car progress: %d %% \n\t There are %d total cars on the bridge\n", currThread, directionString, percentageProgress, numCars);
-    // printf("%d cars waiting on hanover, %d on norwich, %d on access lock\n", waiting_on_hanover, waiting_on_norwich, waiting_on_lock);
     sleep(1);
   }
 }
@@ -183,7 +188,7 @@ bridge_state_new(enum Direction startDir)
   bridge_state_t* newBridgeState = malloc(sizeof(bridge_state_t));
   newBridgeState->num_cars = 0;
   newBridgeState->curr_direction = startDir;
-  newBridgeState->cars = malloc(MAX_CARS * sizeof(pthread_t));
+  newBridgeState->cars = malloc(max_cars * sizeof(pthread_t));
   newBridgeState->access_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
   newBridgeState->num_readers = 0;
   newBridgeState->writing = false;
@@ -212,7 +217,7 @@ bridge_state_new(enum Direction startDir)
 bool
 bridge_state_direction_possible(bridge_state_t* bridgeState, enum Direction direction)
 {
-  if (((direction == bridgeState->curr_direction) && (bridgeState->num_cars < MAX_CARS)) || bridgeState->num_cars < 1) {
+  if (((direction == bridgeState->curr_direction) && (bridgeState->num_cars < max_cars)) || bridgeState->num_cars < 1) {
     // printf("travel is possible in direction %d. Num_cars is %d\n", direction, bridgeState->num_cars);
     return true;
   }
@@ -322,21 +327,17 @@ bridge_state_signal_waiters(bridge_state_t* bridgeState)
   bool signalHanover = false;
   bool signalNorwich = false;
   if (bridge_state_direction_possible(bridgeState, TO_NORWICH)) {
-    // if (!bridgeState->norwich_possible) {
     // printf("signaling in norwich direction\n");
     bridgeState->norwich_possible = true;
     signalNorwich = true;
-    // }
   } else {
     bridgeState->hanover_possible = false;
   }
   
   if (bridge_state_direction_possible(bridgeState, TO_HANOVER)) {
-    // if (!bridgeState->hanover_possible) {
     // printf("signaling in hanover direction\n");
     bridgeState->hanover_possible = true;
     signalHanover = true;
-    // }
   } else {
     bridgeState->hanover_possible = false;
   }
@@ -365,13 +366,9 @@ bridge_state_add_car(bridge_state_t* bridgeState, pthread_t carThread, enum Dire
   pthread_mutex_lock(&bridgeState->access_lock);
   while (!bridge_state_direction_possible(bridgeState, direction)) {
     if (direction == TO_HANOVER) {
-      waiting_on_hanover ++;
       pthread_cond_wait(&bridgeState->hanover_cond, &bridgeState->access_lock);
-      waiting_on_hanover --;
     } else {
-      waiting_on_norwich ++;
       pthread_cond_wait(&bridgeState->norwich_cond, &bridgeState->access_lock);
-      waiting_on_norwich --;
     }
   }
   pthread_mutex_unlock(&bridgeState->access_lock);
@@ -443,18 +440,25 @@ bridge_state_free(bridge_state_t* bridgeState)
 /**************** simulate_traffic ****************/
 /**
  * Spins up threads for each car to simulate traffic accross the bridge
+ * Expects nonzero travel and wait times to avoid floating point errors
  */
 void
-simulate_traffic()
+simulate_traffic(int numIters, int waitTime, int travelTime, int maxCars)
 {
   // loop for defined number of iterations
   // choose a random direction -> random number between 0 and 2 maybe
   // spin up the new thread, add it to a list of thread pointers
   // wait for a random ammount of time between zero and the defined max wait constant
   // loop
-  pthread_t threads[SIMULATION_ITERATIONS];
+  if (travelTime < 1 || waitTime < 1) {
+    printf("Invalid parameters supplied to simulate_traffic");
+    return;
+  }
+  max_travel_time = travelTime;
+  max_cars = maxCars;
+  pthread_t threads[numIters];
   srand((unsigned int)time(NULL));
-  for ( int i = 0; i < SIMULATION_ITERATIONS; i ++ ) {
+  for ( int i = 0; i < numIters; i ++ ) {
     int randVal = rand() % 2;
     enum Direction dir;
     if (randVal < 1) {
@@ -464,12 +468,12 @@ simulate_traffic()
     }
 
     threads[i] = start_car_thread(dir);
-    int randSleepTime = rand() % MAX_WAIT_TIME;
+    int randSleepTime = rand() % waitTime;
     sleep(randSleepTime);
   }
   
   // wait for all threads to terminate after looping terminates
-  for ( int i = 0; i < SIMULATION_ITERATIONS; i ++ ) {
+  for ( int i = 0; i < numIters; i ++ ) {
     pthread_join(threads[i], NULL);
   }
   printf("Simulation complete\n");
@@ -495,4 +499,45 @@ start_car_thread(enum Direction direction)
     printf("Car %lu added to simulation\n", thread_id);
   }
   return thread_id;
+}
+
+// Basic test case -> capacity limit of 3, 25 iterations, medium wait times
+void
+run_test_case_1()
+{
+  enum Direction startDir = TO_NORWICH;
+  global_bridge_state = bridge_state_new(startDir);
+  printf("Running test case 1\n");
+  simulate_traffic(25, 2, 4, 3);
+  printf("\n");
+}
+
+// Short wait times test -> capacity limit of 5, 30 iterations, tiny wait times
+void run_test_case_2()
+{
+  enum Direction startDir = TO_HANOVER;
+  global_bridge_state = bridge_state_new(startDir);
+  printf("Running test case 2\n");
+  simulate_traffic(30, 1, 1, 5);
+  printf("\n");
+}
+
+// Long run test -> 50 iterations, capacity limit of 10, medium wait times
+void run_test_case_3()
+{
+  enum Direction startDir = TO_NORWICH;
+  global_bridge_state = bridge_state_new(startDir);
+  printf("Running test case 3\n");
+  simulate_traffic(50, 2, 5, 10);
+  printf("\n");
+}
+
+// High capacity test -> 50 iterations, medium wait times, capcity limit of 50
+void run_test_case_4()
+{
+  enum Direction startDir = TO_HANOVER;
+  global_bridge_state = bridge_state_new(startDir);
+  printf("Running test case 4\n");
+  simulate_traffic(50, 2, 4, 50);
+  printf("\n");
 }
